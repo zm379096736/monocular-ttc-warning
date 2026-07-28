@@ -1,0 +1,49 @@
+seed: 42
+
+upstream:
+  detector_model: yolo11m.pt
+  detector_confidence: 0.20
+  detector_iou: 0.70
+  vehicle_classes: [2, 3, 5, 7]
+  tracker: bytetrack.yaml
+  flow_model: raft_large
+  sample_stride: 8
+  max_ttc_seconds: 20.0
+  min_radial_samples: 32
+  corridor_half_width_ratio: 0.18
+  corridor_min_overlap: 0.30
+
+sequence:
+  length: 12
+  warmup_frames: 5
+  max_frame_gap: 1
+  reset_ttc_jump_seconds: 6.0
+
+model:
+  feature_names:
+    - ttc
+    - delta_ttc
+    - radial_expansion
+    - detector_confidence
+    - flow_consistency
+    - box_growth
+  hidden_dims: [32, 16]
+  dropout: 0.10
+  min_ttc_seconds: 0.05
+  max_ttc_seconds: 20.0
+
+training:
+  epochs: 80
+  batch_size: 128
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  trend_loss_weight: 0.10
+  grad_clip_norm: 5.0
+  patience: 12
+  num_workers: 4
+
+risk:
+  danger_ttc_seconds: 3.0
+  caution_ttc_seconds: 5.0
+  trend_upgrade_threshold: -0.30
+
