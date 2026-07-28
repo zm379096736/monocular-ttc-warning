@@ -58,6 +58,46 @@ pytest
 
 首次运行会下载 YOLO 和 RAFT 的公开预训练权重。
 
+### 5080 一键运行
+
+仓库提供环境安装与全流程总控脚本。KITTI 因数据许可要求仍需手动下载；把数据放好后执行：
+
+```bash
+git clone https://github.com/zm379096736/monocular-ttc-warning.git
+cd monocular-ttc-warning
+chmod +x scripts/setup_5080.sh scripts/run_all_5080.sh
+./scripts/setup_5080.sh
+
+KITTI_ROOT=/你的路径/KITTI/tracking/training \
+  ./scripts/run_all_5080.sh
+```
+
+总控脚本会自动完成：
+
+1. 检查 NVIDIA 驱动、CUDA PyTorch 与 RTX 5080；
+2. 遍历全部 KITTI Tracking 训练序列；
+3. 生成 TTC 真值并缓存 YOLO/ByteTrack/RAFT 输出；
+4. 按原始序列划分训练、验证与测试集；
+5. 训练时序权重 MLP；
+6. 评测传统基线与本文方法；
+7. 导出每个序列的 TTC、风险等级和可解释权重；
+8. 保存完整运行日志。
+
+每个序列成功后会生成独立缓存；脚本中断后重新执行即可跳过已完成阶段。常用控制项：
+
+```bash
+# 先用 3 个序列检查流程
+KITTI_ROOT=/path/to/training SEQUENCES="0000 0001 0002" ./scripts/run_all_5080.sh
+
+# 强制重新计算
+KITTI_ROOT=/path/to/training FORCE=1 ./scripts/run_all_5080.sh
+
+# 不导出每个序列的预测文件
+KITTI_ROOT=/path/to/training PREDICT_ALL=0 ./scripts/run_all_5080.sh
+```
+
+默认从 PyTorch CUDA 12.8 软件源安装。若官方对 RTX 5080 推荐的软件源发生变化，可通过 `TORCH_INDEX_URL` 覆盖，不需要修改脚本。
+
 ## 数据准备
 
 从 KITTI Tracking training set 准备以下目录。数据不能提交到 GitHub：
@@ -204,4 +244,3 @@ python scripts/predict_cache.py \
 ## 许可证
 
 本仓库代码使用 MIT License。KITTI、Ultralytics YOLO、torchvision RAFT 及其权重适用各自的许可证和数据条款。
-

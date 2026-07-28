@@ -8,6 +8,7 @@ __pycache__/
 data/
 outputs/
 checkpoints/
+*.tmp
 *.pt
 *.pth
 *.onnx
