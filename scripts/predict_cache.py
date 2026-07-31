@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from monocular_ttc.features import FeatureNormalizer
-from monocular_ttc.model import TemporalWeightMLP
+from monocular_ttc.model import build_temporal_model
 from monocular_ttc.risk import RiskPolicy
 
 FEATURE_NAMES = [
@@ -42,14 +42,8 @@ def main() -> None:
     )
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     config = checkpoint["config"]
-    model_config = config["model"]
-    model = TemporalWeightMLP(
-        feature_dim=len(FEATURE_NAMES),
-        hidden_dims=model_config["hidden_dims"],
-        dropout=float(model_config["dropout"]),
-        min_ttc=float(model_config["min_ttc_seconds"]),
-        max_ttc=float(model_config["max_ttc_seconds"]),
-    ).to(device)
+    model_type = checkpoint.get("model_type", "mlp")
+    model = build_temporal_model(config, model_type).to(device)
     model.load_state_dict(checkpoint["model"])
     model.eval()
     with args.normalizer.open("r", encoding="utf-8") as handle:
@@ -101,7 +95,7 @@ def main() -> None:
                     fused, temporal_weights = model(features, candidates)
                 prediction = float(fused.item())
                 weights = temporal_weights[0].cpu().tolist()
-                mode = "mlp_temporal"
+                mode = f"{model_type}_temporal"
             decision = policy.classify(prediction, float(record["delta_ttc"]))
             target.write(
                 json.dumps(

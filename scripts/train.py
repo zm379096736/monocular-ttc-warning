@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 
 from monocular_ttc.config import load_config
 from monocular_ttc.data import TTCSequenceDataset
-from monocular_ttc.model import TemporalWeightMLP, trend_consistency_loss
+from monocular_ttc.model import build_temporal_model, trend_consistency_loss
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,10 +22,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=Path("configs/base.yaml"))
     parser.add_argument("--output", type=Path, default=Path("outputs/base"))
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--model-type", choices=["mlp", "gru", "lstm"], default="mlp")
+    parser.add_argument("--active-features", nargs="*", type=int, default=None)
     return parser.parse_args()
 
 
-def run_epoch(model, loader, device, optimizer, trend_weight: float) -> float:
+def run_epoch(model, loader, device, optimizer, trend_weight: float, active_features=None) -> float:
     training = optimizer is not None
     model.train(training)
     total_loss = 0.0
@@ -34,6 +36,11 @@ def run_epoch(model, loader, device, optimizer, trend_weight: float) -> float:
     with context:
         for batch in loader:
             batch = {key: value.to(device) for key, value in batch.items()}
+            if active_features is not None:
+                inactive = [
+                    i for i in range(batch["features"].shape[-1]) if i not in active_features
+                ]
+                batch["features"][:, :, inactive] = 0.0
             prediction, _ = model(batch["features"], batch["ttc_candidates"], batch["mask"])
             primary = nn.functional.smooth_l1_loss(prediction, batch["target_ttc"])
             trend = trend_consistency_loss(
@@ -45,7 +52,7 @@ def run_epoch(model, loader, device, optimizer, trend_weight: float) -> float:
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), 5.0)
                 optimizer.step()
-            total_loss += float(loss) * len(prediction)
+            total_loss += float(loss.detach()) * len(prediction)
             count += len(prediction)
     return total_loss / max(count, 1)
 
@@ -76,14 +83,7 @@ def main() -> None:
     validation_loader = DataLoader(
         validation_set, batch_size=int(training["batch_size"]), shuffle=False, num_workers=0
     )
-    model_config = config["model"]
-    model = TemporalWeightMLP(
-        feature_dim=len(model_config["feature_names"]),
-        hidden_dims=model_config["hidden_dims"],
-        dropout=float(model_config["dropout"]),
-        min_ttc=float(model_config["min_ttc_seconds"]),
-        max_ttc=float(model_config["max_ttc_seconds"]),
-    ).to(device)
+    model = build_temporal_model(config, args.model_type).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=float(training["learning_rate"]),
@@ -95,10 +95,20 @@ def main() -> None:
     stale_epochs = 0
     for epoch in range(1, int(training["epochs"]) + 1):
         train_loss = run_epoch(
-            model, train_loader, device, optimizer, float(training["trend_loss_weight"])
+            model,
+            train_loader,
+            device,
+            optimizer,
+            float(training["trend_loss_weight"]),
+            args.active_features,
         )
         validation_loss = run_epoch(
-            model, validation_loader, device, None, float(training["trend_loss_weight"])
+            model,
+            validation_loader,
+            device,
+            None,
+            float(training["trend_loss_weight"]),
+            args.active_features,
         )
         row = {"epoch": epoch, "train_loss": train_loss, "validation_loss": validation_loss}
         history.append(row)
@@ -107,7 +117,13 @@ def main() -> None:
             best_loss = validation_loss
             stale_epochs = 0
             torch.save(
-                {"model": model.state_dict(), "config": config, "best_validation_loss": best_loss},
+                {
+                    "model": model.state_dict(),
+                    "config": config,
+                    "best_validation_loss": best_loss,
+                    "model_type": args.model_type,
+                    "active_features": args.active_features,
+                },
                 args.output / "best.pt",
             )
         else:

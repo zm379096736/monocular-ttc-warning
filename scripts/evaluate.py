@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 
 from monocular_ttc.data import TTCSequenceDataset
 from monocular_ttc.metrics import regression_metrics, risk_metrics
-from monocular_ttc.model import TemporalWeightMLP
+from monocular_ttc.model import build_temporal_model
 from monocular_ttc.risk import RiskPolicy
 
 
@@ -33,14 +33,9 @@ def main() -> None:
     )
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     config = checkpoint["config"]
-    model_config = config["model"]
-    model = TemporalWeightMLP(
-        feature_dim=len(model_config["feature_names"]),
-        hidden_dims=model_config["hidden_dims"],
-        dropout=float(model_config["dropout"]),
-        min_ttc=float(model_config["min_ttc_seconds"]),
-        max_ttc=float(model_config["max_ttc_seconds"]),
-    ).to(device)
+    model_type = checkpoint.get("model_type", "mlp")
+    active_features = checkpoint.get("active_features")
+    model = build_temporal_model(config, model_type).to(device)
     model.load_state_dict(checkpoint["model"])
     model.eval()
     dataset = TTCSequenceDataset(args.data / "test.jsonl")
@@ -56,6 +51,9 @@ def main() -> None:
     with torch.inference_mode():
         for batch in loader:
             features = batch["features"].to(device)
+            if active_features is not None:
+                inactive = [i for i in range(features.shape[-1]) if i not in active_features]
+                features[:, :, inactive] = 0.0
             candidates = batch["ttc_candidates"].to(device)
             mask = batch["mask"].to(device)
             prediction, weights = model(features, candidates, mask)
@@ -89,6 +87,8 @@ def main() -> None:
             **regression_metrics(prediction, target),
             **risk_metrics(prediction_risk, target_risk),
         }
+    results["model_type"] = model_type
+    results["active_features"] = active_features
     results["interpretability"] = {
         "mean_temporal_weights": np.concatenate(weight_rows).mean(axis=0).tolist()
     }

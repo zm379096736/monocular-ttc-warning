@@ -64,6 +64,80 @@ class TemporalWeightMLP(nn.Module):
         return fused, weights
 
 
+class TemporalRecurrentRegressor(nn.Module):
+    """GRU/LSTM baseline that directly regresses TTC from a feature sequence."""
+
+    def __init__(
+        self,
+        feature_dim: int = 6,
+        hidden_dim: int = 32,
+        num_layers: int = 1,
+        dropout: float = 0.1,
+        cell: str = "gru",
+        min_ttc: float = 0.05,
+        max_ttc: float = 20.0,
+    ) -> None:
+        super().__init__()
+        recurrent = nn.GRU if cell == "gru" else nn.LSTM if cell == "lstm" else None
+        if recurrent is None:
+            raise ValueError(f"Unsupported recurrent cell: {cell}")
+        self.encoder = recurrent(
+            feature_dim,
+            hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout if num_layers > 1 else 0.0,
+        )
+        self.head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+        self.min_ttc = min_ttc
+        self.max_ttc = max_ttc
+
+    def forward(
+        self,
+        features: Tensor,
+        ttc_candidates: Tensor,
+        mask: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        if mask is None:
+            mask = torch.ones(features.shape[:2], dtype=torch.bool, device=features.device)
+        lengths = mask.sum(dim=1).clamp_min(1)
+        encoded, _ = self.encoder(features)
+        last_indices = lengths - 1 + (mask.shape[1] - lengths)
+        last = encoded.gather(1, last_indices[:, None, None].expand(-1, 1, encoded.shape[-1]))
+        raw = self.head(last.squeeze(1)).squeeze(1)
+        prediction = self.min_ttc + (self.max_ttc - self.min_ttc) * torch.sigmoid(raw)
+        weights = mask.float() / lengths[:, None]
+        return prediction, weights
+
+
+def build_temporal_model(config: dict, model_type: str = "mlp") -> nn.Module:
+    model_config = config["model"]
+    common = {
+        "feature_dim": len(model_config["feature_names"]),
+        "min_ttc": float(model_config["min_ttc_seconds"]),
+        "max_ttc": float(model_config["max_ttc_seconds"]),
+    }
+    if model_type == "mlp":
+        return TemporalWeightMLP(
+            **common,
+            hidden_dims=model_config["hidden_dims"],
+            dropout=float(model_config["dropout"]),
+        )
+    if model_type in {"gru", "lstm"}:
+        return TemporalRecurrentRegressor(
+            **common,
+            hidden_dim=int(model_config.get("recurrent_hidden_dim", 32)),
+            num_layers=int(model_config.get("recurrent_layers", 1)),
+            dropout=float(model_config["dropout"]),
+            cell=model_type,
+        )
+    raise ValueError(f"Unsupported model type: {model_type}")
+
+
 def trend_consistency_loss(prediction: Tensor, target: Tensor, previous_target: Tensor) -> Tensor:
     """Penalize a predicted TTC change whose sign disagrees with ground truth."""
     true_delta = target - previous_target
