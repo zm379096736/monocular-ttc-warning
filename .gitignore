@@ -13,4 +13,6 @@ checkpoints/
 *.pth
 *.onnx
 *.npz
+!artifacts/checkpoints/
+!artifacts/checkpoints/*.pt
 .DS_Store
